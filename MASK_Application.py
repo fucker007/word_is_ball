@@ -12,7 +12,7 @@ sys.path.append('./')
 from data.ALLDATA import ALLDATA 
 from data.TEST import TestData
 from core.mobilefacenet import MobileFacenet
-from core.resnet import Resnet
+from core.ball import Ball_net
 from core.loss import Cognitive
 from torch.utils.tensorboard import SummaryWriter
 from sklearn.metrics import balanced_accuracy_score
@@ -26,7 +26,7 @@ class Mask:
         self.Datasets = self.get_datasets(args)
         self.Loss = self.get_lossFunction()
         self.opt = self.get_optim()
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.opt, "min",patience=10,min_lr=0.00001,verbose=True)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.opt, "min",patience=100,min_lr=0.00001,verbose=True)
         t = time.localtime()
         self.writer = SummaryWriter(
                 log_dir=os.path.join(self.prefix_dir, "log_tensorboard","%s_%s_%s" % (str(t.tm_mon), str(t.tm_mday), str(t.tm_hour))))
@@ -36,7 +36,8 @@ class Mask:
         train_set = ALLDATA(
                 root_path = args.data_path,
                 w = args.input_size,
-                h = args.input_size) # w , h can changge , mode design
+                h = args.input_size,
+                device=self.device) # w , h can changge , mode design
         valid_set = TestData(
                 csv_path = args.val_path,
                 w = args.input_size,
@@ -53,14 +54,9 @@ class Mask:
     def get_model(self):
         if self.args.pretrain:
             model_path = os.path.join(self.prefix_dir,"model_"+str(self.args.pretrain_epoch)+".pth")
-            pre_model = models.resnet101(pretrained=False)
-            model = Resnet(pre_model, self.args.num_class)
-            model.load_state_dict(torch.load(model_path))
+            model = (torch.load(model_path))
         else:
-            #model = Resnet(num_class=self.args.num_class)
-            #pre_model = models.resnet101(pretrained=True)
-            pre_model = models.resnet101(pretrained=True)
-            model = Resnet(pre_model, self.args.num_class)
+            model = Ball_net(self.args.num_class)
         if len(self.gpus) > 1:
             model = torch.nn.DataParallel(model, device_ids=self.gpus)
         model.to(self.device)
@@ -77,13 +73,14 @@ class Mask:
     
     def get_lossFunction(self):
         # add others loss function on here,Now, just use jiaochashang
-        # Cross = nn.CrossEntropyLoss()
-        # Cross.to(self.device)
-        loss = Cognitive(self.device)
+        loss = nn.CrossEntropyLoss()
+        loss.to(self.device)
+        #loss = Cognitive(self.device)
         return loss
 
     def get_optim(self):
-        opt = optim.Adam(filter(lambda p:p.requires_grad, self.model.parameters()),lr = self.args.lr)
+        #opt = optim.Adam(filter(lambda p:p.requires_grad, self.model.parameters()),lr = self.args.lr)
+        opt = optim.Adam(self.model.parameters(),lr = self.args.lr)
         return opt
 
     def save_log(self, tags, values, n_iter):
@@ -107,60 +104,37 @@ class Mask:
     
     def backwark_grid(self):
         for name, params in self.model.named_parameters():	
-            if params == None:
+            print(name, params)
+            if type(params) == "NoneType":
+                print(name)
                 print("params is None! ")
                 break
-            print('-->name:', name, '-->grad_requirs:',parms.requires_grad,'-->grad_value:',parms.grad.shape, "--> data", parms.data.shape)
+            print('-->name:', name, '-->grad_requirs:',params.requires_grad,'-->grad_value:',params.grad, "--> data", params.data)
         print("----------------------------------------------------------------------------------------------")
     
-    def LB_hot(self, labeles):
-        label_xy = torch.zeros(labeles.shape[0],2, device=self.device,dtype=int)
-        count = 0
-        for label in labeles:
-            i = label // 3+1
-            j = (label %3)*3+1
-            label_xy[count][0] = i
-            label_xy[count][1] = j
-            count += 1
-        #print(labeles)
-        #print("---------------------------------------")
-        #print(label_x)
-        #print("-------------------END--------------------")
-        #print("---------------------------------------")
-        #print(label_y)
-        #print("-------------------END--------------------")
-        return label_xy
-
     def calculat_roc(self, net_output, label):
-        LB_hots = self.LB_hot(label)
-        LB_hots = LB_hots.float()
-        # print(net_output.shape)
-        # predict_good = torch.argmax(net_output, dim=1)
-        predict_good = net_output
-        # print("predict: ", predict_good)
-        # print("label: ", label)
+        #print(net_output.shape)
+        y_pre = torch.argmax(net_output, dim=1)
+        acc = (y_pre==label).sum().float() / len(label)
+        acc = acc.detach().cpu().numpy()
+        #print("predict: ", y_pre)
+        #print("label: ", label)
         #print("[", predict_good[0].detach().cpu().numpy(), label[0].detach().cpu().numpy(),end="]")
-        precision = np.sum(self.compare_numpy(net_output, LB_hots)) / label.shape[0]
-        #fp = np.sum(np.logical_and(y_pre,np.logical_not(label )))
-        #tn = np.sum(np.logical_and(np.logical_not(y_pre), np.logical_not(label)))
+        #tp = np.sum(np.logical_and(y_pre,np.logical_not(label )))
         #fn = np.sum(np.logical_and(np.logical_not(y_pre), label))
         #tpr = 0 if (tp+fn==0) else float(tp) / float(tp+fn)
         #fpr = 0 if (fp+tn==0) else float(fp) / float(fp+tn)
-        #acc = float(tp+tn)/len(label)
+        #acc = float(tp)/len(label)
         #print("tpr",tpr, "fpr",fpr,"acc",acc)
-        return 0, 0, precision
+        return 0, 0, acc
 
 
     def update(self, data):
-        img, label = data['image'].to(self.device), data['label'].to(self.device)
-        zeros = self.LB_hot(label)
-        zeros = zeros.float()
-        #print(zeros)
-        # print("zeros shape: ", zeros.shape)
-
+        img, label = data['ball'].to(self.device), data['label'].to(self.device)
+        #print("img shape :", img.shape)
         self.opt.zero_grad()
         output = self.model(img)
-        loss = self.Loss(output, zeros)
+        loss = self.Loss(output, label)
         loss.backward()
         # check the info of  backward 
         #self.backwark_grid()
@@ -172,13 +146,11 @@ class Mask:
         # return [loss.cpu().detach().numpy(),0,0,0,lr]
 
     def forward(self, data):
-        img, label = data['image'].to(self.device), data['label'].to(self.device)
+        img, label = data['ball'].to(self.device), data['label'].to(self.device)
         #zeros = torch.zeros(label.shape[0], self.args.num_class, 2, device=self.device,dtype=float)
         #onehot_label = torch.nn.functional.one_hot(label, num_classes=self.args.num_class)
         #zeros[:,:,0] = onehot_label
         #zeros[:,:,1] = onehot_label
-        zeros = self.LB_hot(label)
-        zeros = zeros.float()
         output = self.model(img)
         loss = self.Loss(output, zeros)
         tpr, fpr, acc = self.calculat_roc(output, label)
@@ -221,6 +193,7 @@ class Mask:
                     print("[train]: epoch[%d],---> loss[%.4f], acc[%.4f]" % (epoch, values[0], values[-2]))
             all_rate = [train_loss / step, train_tpr / step, train_fpr / step, train_acc / step, values[-1]]
             self.save_log(['train/loss','train/tpr','train/fpr','train/acc','train/learning_rate'], all_rate, epoch)
+            self.save_model(epoch)
             # validation
-            average_loss = self.validation(valid_loader,epoch)
-            self.scheduler.step(average_loss)
+            #average_loss = self.validation(valid_loader,epoch)
+            #self.scheduler.step(average_loss)

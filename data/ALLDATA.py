@@ -19,14 +19,16 @@ class ALLDATA(Dataset):
     Achor: liuyang 
         
     '''
-    def __init__(self,root_path,w,h,transform=None):
+    def __init__(self,root_path,w,h,device):
         """
             
         """
+        self.device = device
         self.root_path = root_path
         self.landmark = pd.read_csv(
                 #os.path.join(root_path,"10_class_train_label_shuffle.csv"),
-                os.path.join(root_path,"train_shuffle.csv"),
+                #os.path.join(root_path,"train_shuffle.csv"),
+                os.path.join(root_path,"train.csv"),
                 error_bad_lines=False)
         self.w = w
         self.h = h
@@ -39,6 +41,47 @@ class ALLDATA(Dataset):
 
     def __len__(self):
         return len(self.landmark)
+
+    def normalization(self, data):
+       _range = torch.max(abs(data))
+       return data / _range
+
+
+    def x_index(self, shape):
+        matrix = torch.zeros(shape)
+        for i in range(shape[1]):
+            matrix[:,i,:] = i+1
+        #print(matrix)
+        return matrix
+
+    def y_index(self, shape):
+        matrix = torch.zeros(shape)
+        for i in range(shape[1]):
+            matrix[:,:,i] = i+1
+        return matrix
+
+
+    def ball_img(self, img):
+        shape = img.shape
+
+        r = (img**2 + self.x_index(shape)**2 + self.y_index(shape)**2)**0.5
+        
+        alth = torch.acos(img/r)
+        
+        seta = torch.atan(self.x_index(img.shape) / self.y_index(img.shape))
+        
+        idx = torch.randperm(shape[2]*shape[1])
+        r = self.normalization(r)
+        r = r.reshape(shape[0],shape[1]*shape[2])
+        r = r[:,idx]
+        alth = alth.reshape(shape[0],shape[1]*shape[2])
+        alth = alth[:,idx]
+        seta = seta.reshape(shape[0],shape[1]*shape[2])
+        seta = seta[:,idx]
+        return torch.cat((r, alth, seta))
+
+        
+
 
     def __getitem__(self,idx):
         if torch.is_tensor(idx):
@@ -56,16 +99,20 @@ class ALLDATA(Dataset):
         assert 0 not in img.shape, f'0 can not be included in image.shape {img.shape} {img_path}'
         image = self.aug.augment_image(img)
         image = self.transforms(image)
-
+        ball = self.ball_img(image)
         label = self.landmark.iloc[idx,1]
-        sample = {'image':image,'path':img_path,'label': int(label)}
+        sample = {'ball':ball,'path':img_path,'label': int(label)}
         return sample
 if __name__ == "__main__":
-    dt = ALLDATA(root_path="/ext_disk3/data_liuyang/Mask_dataset",
-                              w=112,
-                              h=112)
+    dt = ALLDATA(root_path="/home/liuyang/DataPublic/train/",
+                              w=224,
+                              h=224)
     dl = DataLoader(dt,batch_size=1,shuffle=True,num_workers=1)
     for batch_i,data in enumerate(dl):
+        print(data['ball'].shape)
+        break
+
+        ''''
         print("image path --->:" ,data['path'])
         image = data['image'].numpy()[0]
         image = image.transpose(1,2,0)
@@ -77,3 +124,4 @@ if __name__ == "__main__":
         cv2.imshow('image',image)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+        '''
